@@ -42,12 +42,28 @@ struct FingerPrints {
     int winSize;
     std::vector<TCP_OPS> tcpOptions;
     IP_ID_BEHAVIOR ipIdBehv;
-    int tcpTsOptions;                   // 0=present, 1=absent
+    int tcpTsOptions = 0;                   // 0=present, 1=absent
+    unsigned int points = 0;
 };
 
-std::unordered_map<const char*, FingerPrints> osCheck
+std::unordered_map<const char*, FingerPrints> osCheckTable
 {
-    {"Windows 10", {TTL::_128, 65535, {TCP_OPS::MSS, TCP_OPS::NOP, TCP_OPS::WS, TCP_OPS::SACK, TCP_OPS::TS, TCP_OPS::NOP, TCP_OPS::NOP}, IP_ID_BEHAVIOR::INC_GLOBAL, 0}},
+    {"Windows XP",   {TTL::_128, 65535, {TCP_OPS::MSS, TCP_OPS::NOP, TCP_OPS::WS, TCP_OPS::SACK, TCP_OPS::TS, TCP_OPS::NOP, TCP_OPS::NOP}, IP_ID_BEHAVIOR::INC_GLOBAL}},
+    {"Windows 7",    {TTL::_128, 8192,  {TCP_OPS::MSS, TCP_OPS::WS, TCP_OPS::SACK, TCP_OPS::TS, TCP_OPS::NOP, TCP_OPS::NOP}, IP_ID_BEHAVIOR::INC_DEST}},
+    {"Windows 10",   {TTL::_128, 8192,  {TCP_OPS::MSS, TCP_OPS::WS, TCP_OPS::SACK, TCP_OPS::TS, TCP_OPS::NOP, TCP_OPS::NOP}, IP_ID_BEHAVIOR::RANDOM}},
+    {"Windows 11",   {TTL::_128, 65535, {TCP_OPS::MSS, TCP_OPS::WS, TCP_OPS::SACK, TCP_OPS::TS, TCP_OPS::NOP, TCP_OPS::NOP}, IP_ID_BEHAVIOR::RANDOM}},
+
+    {"Linux 2.4",    {TTL::_64,  5840,  {TCP_OPS::MSS, TCP_OPS::SACK, TCP_OPS::TS, TCP_OPS::NOP, TCP_OPS::WS}, IP_ID_BEHAVIOR::INC_DEST}},
+    {"Linux 2.6",    {TTL::_64,  5840,  {TCP_OPS::MSS, TCP_OPS::SACK, TCP_OPS::TS, TCP_OPS::NOP, TCP_OPS::WS}, IP_ID_BEHAVIOR::INC_DEST}},
+    {"Linux 3.x",    {TTL::_64,  29200, {TCP_OPS::MSS, TCP_OPS::SACK, TCP_OPS::TS, TCP_OPS::NOP, TCP_OPS::WS}, IP_ID_BEHAVIOR::INC_DEST}},
+    {"Linux 4.x/5.x",{TTL::_64,  29200, {TCP_OPS::MSS, TCP_OPS::SACK, TCP_OPS::TS, TCP_OPS::NOP, TCP_OPS::WS}, IP_ID_BEHAVIOR::INC_DEST}},
+
+    {"macOS 10.x",   {TTL::_64,  65535, {TCP_OPS::MSS, TCP_OPS::NOP, TCP_OPS::WS, TCP_OPS::SACK, TCP_OPS::TS, TCP_OPS::NOP, TCP_OPS::NOP}, IP_ID_BEHAVIOR::RANDOM}},
+    {"FreeBSD",      {TTL::_64,  65535, {TCP_OPS::MSS, TCP_OPS::NOP, TCP_OPS::WS, TCP_OPS::SACK, TCP_OPS::TS, TCP_OPS::NOP, TCP_OPS::NOP}, IP_ID_BEHAVIOR::RANDOM}},
+    {"OpenBSD",      {TTL::_64,  16384, {TCP_OPS::MSS, TCP_OPS::NOP, TCP_OPS::WS, TCP_OPS::SACK, TCP_OPS::TS, TCP_OPS::NOP, TCP_OPS::NOP}, IP_ID_BEHAVIOR::RANDOM}},
+    {"NetBSD",       {TTL::_64,  16384, {TCP_OPS::MSS, TCP_OPS::NOP, TCP_OPS::WS, TCP_OPS::SACK, TCP_OPS::TS, TCP_OPS::NOP, TCP_OPS::NOP}, IP_ID_BEHAVIOR::INC_GLOBAL}},
+    {"Solaris 10",   {TTL::_255, 8760,  {TCP_OPS::MSS, TCP_OPS::WS, TCP_OPS::SACK, TCP_OPS::TS, TCP_OPS::NOP, TCP_OPS::NOP}, IP_ID_BEHAVIOR::INC_GLOBAL}},
+    {"Cisco IOS",    {TTL::_255, 4128,  {TCP_OPS::MSS}, IP_ID_BEHAVIOR::INC_GLOBAL, 1}}
 };
 
 int main() {
@@ -58,14 +74,15 @@ int main() {
     const int SCANNING_PORTS[NUMBER_OF_PORTS] = {
         21, 22, 23, 25, 53, 80, 110, 143, 443, 465, 587, 993, 995, 3306, 3389, 5900, 8080, 8443, 1723, 5060, 179, 199, 514, 8000, 49152
     };
-
     
-    
+    osScan(TARGET_IPV4, MY_SUPER_SPECIAL_PRIVATE_OMEGA_IPV4, SCANNING_PORTS, CONNECTION_TIMEOUT);
 
     return 0;
 }
 
 void osScan(const char* TARGET_IPV4, const char* MY_SUPER_SPECIAL_PRIVATE_OMEGA_IPV4, const int SCANNING_PORTS[NUMBER_OF_PORTS], const int CONNECTION_TIMEOUT) {
+    std::vector<uint16_t> collectedIpHdrIds;
+
     for (int i = 0; i < NUMBER_OF_PORTS; i++) {
         int port = SCANNING_PORTS[i];
 
@@ -147,9 +164,19 @@ void osScan(const char* TARGET_IPV4, const char* MY_SUPER_SPECIAL_PRIVATE_OMEGA_
 
             if (recIpHdr->saddr == ip->daddr && recTcpHdr->source == tcp->dest) { // If the packet is from requested source
                 if (recTcpHdr->syn && recTcpHdr->ack) {
+                    struct receivedFingerprints {
+                        uint8_t ttl;
+                        uint16_t winSize;
+                        std::vector<TCP_OPS> tcpOptions;
+                        IP_ID_BEHAVIOR ipIdBehv;
+                        int tcpTsOptions = 0;
+                    } recOsFingerprints;
 
-                    
+                    recOsFingerprints.ttl = recIpHdr->ttl;
 
+                    if ((recTcpHdr->doff == 5)) {
+                        recOsFingerprints.tcpTsOptions = 1;
+                    }
 
                     //---------------------------------------------------------------------------------
                     uint8_t rstPck[4096];                           // RST packet
