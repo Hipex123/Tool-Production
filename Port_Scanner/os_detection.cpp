@@ -8,12 +8,47 @@
 #include <iostream>
 #include <random>
 #include <chrono>
+#include <unordered_map>
+#include <variant>
 
 constexpr int NUMBER_OF_PORTS = 25;
 
 uint16_t checksum(const void* buf, size_t len);
 uint16_t tcpChecksum(const iphdr* ip, const tcphdr* tcp, const uint8_t* payload, size_t plen);
 void osScan(const char* TARGET_IPV4, const char* MY_SUPER_SPECIAL_PRIVATE_OMEGA_IPV4, const int SCANNING_PORTS[NUMBER_OF_PORTS], const int CONNECTION_TIMEOUT);
+
+enum TTL {
+    _255 = (const unsigned short) 255,
+    _128 = (const unsigned short) 128,
+    _64 = (const unsigned short) 64
+};
+
+enum TCP_OPS {  // SYN Order
+    MSS = 1,
+    NOP,
+    WS,
+    SACK,
+    TS
+};
+
+enum IP_ID_BEHAVIOR {
+    INC_GLOBAL = 1,
+    INC_DEST,
+    RANDOM
+};
+
+struct FingerPrints {
+    TTL ttl;
+    int winSize;
+    std::vector<TCP_OPS> tcpOptions;
+    IP_ID_BEHAVIOR ipIdBehv;
+    int tcpTsOptions;                   // 0=present, 1=absent
+};
+
+std::unordered_map<const char*, FingerPrints> osCheck
+{
+    {"Windows 10", {TTL::_128, 65535, {TCP_OPS::MSS, TCP_OPS::NOP, TCP_OPS::WS, TCP_OPS::SACK, TCP_OPS::TS, TCP_OPS::NOP, TCP_OPS::NOP}, IP_ID_BEHAVIOR::INC_GLOBAL, 0}},
+};
 
 int main() {
     const char* MY_SUPER_SPECIAL_PRIVATE_OMEGA_IPV4 = "XXX.XXX.XXX.XXX";
@@ -195,4 +230,5 @@ uint16_t tcpChecksum(const iphdr* ip, const tcphdr* tcp, const uint8_t* payload,
 
     return checksum(buf.data(), buf.size());
 }
+
 
