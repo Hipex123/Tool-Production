@@ -13,10 +13,6 @@
 
 constexpr int NUMBER_OF_PORTS = 25;
 
-uint16_t checksum(const void* buf, size_t len);
-uint16_t tcpChecksum(const iphdr* ip, const tcphdr* tcp, const uint8_t* payload, size_t plen);
-void osScan(const char* TARGET_IPV4, const char* MY_SUPER_SPECIAL_PRIVATE_OMEGA_IPV4, const int SCANNING_PORTS[NUMBER_OF_PORTS], const int CONNECTION_TIMEOUT);
-
 enum TTL {
     _255 = (const unsigned short) 255,
     _128 = (const unsigned short) 128,
@@ -36,6 +32,21 @@ enum IP_ID_BEHAVIOR {
     INC_DEST,
     RANDOM
 };
+
+struct receivedFingerprints {
+    uint8_t ttl;
+    uint16_t winSize;
+    std::vector<TCP_OPS> tcpOptions;
+    IP_ID_BEHAVIOR ipIdBehv;
+    int tcpTsOptions = 1;
+};
+
+uint16_t checksum(const void* buf, size_t len);
+uint16_t tcpChecksum(const iphdr* ip, const tcphdr* tcp, const uint8_t* payload, size_t plen);
+void osScan(const char* TARGET_IPV4, const char* MY_SUPER_SPECIAL_PRIVATE_OMEGA_IPV4, const int SCANNING_PORTS[NUMBER_OF_PORTS], const int CONNECTION_TIMEOUT);
+void getTcpOption(tcphdr *targetTcpHeader, receivedFingerprints &bufferStruct);
+
+
 
 struct FingerPrints {
     TTL ttl;
@@ -159,23 +170,22 @@ void osScan(const char* TARGET_IPV4, const char* MY_SUPER_SPECIAL_PRIVATE_OMEGA_
             if (recIpHdr->protocol != IPPROTO_TCP) {
                 continue;
             }
-
+            
             tcphdr* recTcpHdr = (tcphdr*) (buf + recIpHdr->ihl*4);    // Skip to the START_PORT of tcp hdr
 
             if (recIpHdr->saddr == ip->daddr && recTcpHdr->source == tcp->dest) { // If the packet is from requested source
                 if (recTcpHdr->syn && recTcpHdr->ack) {
-                    struct receivedFingerprints {
-                        uint8_t ttl;
-                        uint16_t winSize;
-                        std::vector<TCP_OPS> tcpOptions;
-                        IP_ID_BEHAVIOR ipIdBehv;
-                        int tcpTsOptions = 0;
-                    } recOsFingerprints;
+                    std::cout << port << "\n";
+                    receivedFingerprints recOsFingerprints;
 
                     recOsFingerprints.ttl = recIpHdr->ttl;
+                    recOsFingerprints.winSize = recTcpHdr->window;
 
-                    if ((recTcpHdr->doff == 5)) {
+                    if ((recTcpHdr->doff <= 5)) {
                         recOsFingerprints.tcpTsOptions = 1;
+                    }
+                    else {
+                        getTcpOption(recTcpHdr, recOsFingerprints);
                     }
 
                     //---------------------------------------------------------------------------------
@@ -203,9 +213,12 @@ void osScan(const char* TARGET_IPV4, const char* MY_SUPER_SPECIAL_PRIVATE_OMEGA_
                     if (sendto(soc, rstPck, sizeof(iphdr) + sizeof(tcphdr),         // Tell destination host that it is ugly and you dont want to see it no more
                     0, (sockaddr*)&addr, sizeof(addr)) < 0) {
                         std::perror("sendto RST");
-                    } else {
-                        std::cout << port << " is open\n";
                     }
+                    
+                    for (TCP_OPS tcp_op : recOsFingerprints.tcpOptions) {
+                        std::cout << tcp_op << "\n";
+                    }
+
                     break;
                 }
             }
@@ -258,4 +271,49 @@ uint16_t tcpChecksum(const iphdr* ip, const tcphdr* tcp, const uint8_t* payload,
     return checksum(buf.data(), buf.size());
 }
 
+void getTcpOption(tcphdr *targetTcpHeader, receivedFingerprints &bufferStruct) {
+    uint16_t tcpHdrLen = targetTcpHeader->doff * 4;
+    uint16_t tcpOptionsLen = tcpHdrLen - 20;
+    uint8_t* optionsStart = (uint8_t*) targetTcpHeader + 20;
 
+    if (tcpHdrLen <= 20) return;
+
+    for (uint16_t i = 0; i < tcpOptionsLen;) {
+        std::cout << "GETTING OPTIONS" << "\n";
+        std::cout << tcpOptionsLen << "\n";
+        uint8_t optionType = optionsStart[i];
+
+        if (optionType == 0) break;
+
+        if (i + 1 >= tcpOptionsLen) break;
+        uint16_t optionLen = optionType == 1 ? 1 : optionsStart[i+1];
+        if (optionLen < 2 || i + optionLen > tcpOptionsLen) break;
+
+        switch (optionType)
+        {
+        case 1:
+            bufferStruct.tcpOptions.push_back(TCP_OPS::NOP);
+            break;
+        case 2:
+            bufferStruct.tcpOptions.push_back(TCP_OPS::MSS);
+            break;
+        case 3:
+            bufferStruct.tcpOptions.push_back(TCP_OPS::WS);
+            break;
+        case 4:
+            bufferStruct.tcpOptions.push_back(TCP_OPS::SACK);
+            break;
+        case 5:
+            bufferStruct.tcpOptions.push_back(TCP_OPS::SACK);
+            break;
+        case 8:
+            bufferStruct.tcpOptions.push_back(TCP_OPS::TS);
+            bufferStruct.tcpTsOptions = 0;
+            break;
+        default:
+            break;
+        }
+
+        i += optionLen;
+    }
+}
